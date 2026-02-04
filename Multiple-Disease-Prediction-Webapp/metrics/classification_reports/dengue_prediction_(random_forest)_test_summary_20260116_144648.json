@@ -1,0 +1,31 @@
+{
+    "model_name": "Dengue Prediction (Random Forest)",
+    "dataset_split": "test",
+    "evaluation_date": "2026-01-16 14:46:49",
+    "total_samples": 2000,
+    "metrics": {
+        "accuracy": 0.5,
+        "precision": 0.5,
+        "recall": 1.0,
+        "f1_score": 0.6666666666666666,
+        "roc_auc": 0.799684
+    },
+    "class_names": [
+        "No Dengue",
+        "Dengue Positive"
+    ],
+    "confusion_matrix": [
+        [
+            0,
+            1000
+        ],
+        [
+            0,
+            1000
+        ]
+    ],
+    "confusion_matrix_labels": {
+        "actual_label": "Actual",
+        "predicted_label": "Predicted"
+    }
+}

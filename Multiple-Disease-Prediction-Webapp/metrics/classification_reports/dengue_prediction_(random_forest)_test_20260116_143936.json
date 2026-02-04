@@ -1,0 +1,27 @@
+{
+    "No Dengue": {
+        "precision": 1.0,
+        "recall": 0.3661669165417291,
+        "f1-score": 0.5360500420675275,
+        "support": 20010.0
+    },
+    "Dengue Positive": {
+        "precision": 0.7027863051578281,
+        "recall": 1.0,
+        "f1-score": 0.8254544954103189,
+        "support": 29990.0
+    },
+    "accuracy": 0.74634,
+    "macro avg": {
+        "precision": 0.851393152578914,
+        "recall": 0.6830834582708646,
+        "f1-score": 0.6807522687389231,
+        "support": 50000.0
+    },
+    "weighted avg": {
+        "precision": 0.8217312258336652,
+        "recall": 0.74634,
+        "f1-score": 0.7096348331825337,
+        "support": 50000.0
+    }
+}
