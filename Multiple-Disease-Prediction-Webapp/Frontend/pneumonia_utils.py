@@ -177,23 +177,15 @@ def create_annotated_image(original_image, regions, pneumonia_detected, pneumoni
     draw = ImageDraw.Draw(img_with_annotation, 'RGBA')
     
     if pneumonia_detected and regions:
-        # Color based on pneumonia type
-        color_map = {
-            "COVID-19": (220, 20, 60, 100),      # Crimson
-            "Bacterial": (255, 140, 0, 100),     # Dark orange
-            "Viral": (255, 215, 0, 100),         # Gold
-            "Unknown": (169, 169, 169, 100)      # Gray
-        }
-        
+        # Color based on pneumonia type - Only borders, no fill
         outline_map = {
-            "COVID-19": (220, 20, 60, 255),
-            "Bacterial": (255, 140, 0, 255),
-            "Viral": (255, 215, 0, 255),
-            "Unknown": (169, 169, 169, 255)
+            "COVID-19": (220, 20, 60, 255),      # Crimson border
+            "Bacterial": (255, 80, 0, 255),      # Orange border
+            "Viral": (255, 200, 0, 255),         # Gold border
+            "Unknown": (100, 100, 100, 255)      # Gray border
         }
         
-        fill_color = color_map.get(pneumonia_type, (169, 169, 169, 100))
-        outline_color = outline_map.get(pneumonia_type, (169, 169, 169, 255))
+        outline_color = outline_map.get(pneumonia_type, (100, 100, 100, 255))
         
         # Normalize regions to image dimensions
         img_width, img_height = original_image.size
@@ -208,8 +200,8 @@ def create_annotated_image(original_image, regions, pneumonia_detected, pneumoni
             x2 = min(img_width, int((x + w) * scale_x))
             y2 = min(img_height, int((y + h) * scale_y))
             
-            # Draw rectangle with transparency
-            draw.rectangle([x1, y1, x2, y2], fill=fill_color, outline=outline_color, width=3)
+            # Draw circle outline with colored border only (no fill)
+            draw.ellipse([x1, y1, x2, y2], fill=None, outline=outline_color, width=6)
     
     # Convert back to RGB for display
     return img_with_annotation.convert('RGB')

@@ -1,378 +1,580 @@
 import joblib
 import pandas as pd
+import numpy as np
 import re
 import os
-
-# --------------------------------------------------
-# Compatibility patch for sklearn 1.8.0
-# --------------------------------------------------
-# Fix for SimpleImputer compatibility with older models
 from sklearn.impute import SimpleImputer
 
-# Patch SimpleImputer to add missing _fill_dtype attribute if needed
-original_getstate = SimpleImputer.__getstate__ if hasattr(SimpleImputer, '__getstate__') else None
+# --------------------------------------------------
+# Compatibility Patch for sklearn 1.8.0
+# --------------------------------------------------
+def patch_simple_imputer():
+    """Fix SimpleImputer compatibility issue with older pickled models"""
+    if not hasattr(SimpleImputer, '_fill_dtype'):
+        SimpleImputer._fill_dtype = np.dtype('float64')
 
-def patched_getattribute(self, name):
-    if name == '_fill_dtype':
-        # Return a default value for the missing attribute
-        if not hasattr(self, '_fill_dtype_internal'):
-            import numpy as np
-            self._fill_dtype_internal = np.dtype('float64')
-        return self._fill_dtype_internal
-    return object.__getattribute__(self, name)
-
-# Apply the patch
-SimpleImputer.__getattribute__ = patched_getattribute
+patch_simple_imputer()
 
 # --------------------------------------------------
-# Load Asthma model pipeline (Random Forest pipeline)
+# Load Asthma Model
 # --------------------------------------------------
-# Get the directory where this script is located
+
 script_dir = os.path.dirname(os.path.abspath(__file__))
 model_path = os.path.join(script_dir, "models", "asthma_rf_pipeline.pkl")
 
 asthma_model = None
+
 if os.path.exists(model_path):
     try:
         asthma_model = joblib.load(model_path)
-        # Silent load - don't print during import
-    except Exception as e:
-        asthma_model = "unavailable"
-else:
-    asthma_model = "unavailable"
+    except Exception:
+        asthma_model = None
+
 
 # --------------------------------------------------
-# Extract asthma parameters from OCR text
+# Encoding helpers
 # --------------------------------------------------
-def extract_asthma_features(text: str):
-    """
-    Extract required asthma features from OCR-extracted lab report text
-    """
-    
-    def safe_extract_float(pattern, text, default):
-        """Safely extract float value from text with regex"""
-        try:
-            match = re.search(pattern, text, re.IGNORECASE)
-            if match:
-                # Get the last captured group that is a number
-                for group in match.groups()[::-1]:
-                    if group:
-                        val = float(group)
-                        return val
-            return default
-        except (ValueError, TypeError, AttributeError):
-            return default
 
-    # Enhanced patterns for better extraction
-    # Try multiple patterns for each value
-    
-    # FEV1 - try different formats
-    fev1_value = safe_extract_float(r'FEV1\s*[:\-]?\s*([\d.]+)', text, None)
-    if fev1_value is None:
-        fev1_value = safe_extract_float(r'Forced\s*Expiratory\s*Volume.*?(\d+\.?\d*)', text, 2.5)
-    else:
-        fev1_value = fev1_value if fev1_value else 2.5
-    
-    # Peak Flow - improved pattern
-    peak_flow_value = safe_extract_float(r'Peak\s*(?:Expiratory\s*)?Flow\s*[:\-]?\s*([\d.]+)', text, None)
-    if peak_flow_value is None:
-        peak_flow_value = safe_extract_float(r'PEF\s*[:\-]?\s*([\d.]+)', text, 450.0)
-    else:
-        peak_flow_value = peak_flow_value if peak_flow_value else 450.0
-    
-    # FeNO - improved pattern
-    feno_value = safe_extract_float(r'FeNO\s*(?:Level)?\s*[:\-]?\s*([\d.]+)', text, None)
-    if feno_value is None:
-        feno_value = safe_extract_float(r'Fractional\s*exhaled\s*NO.*?(\d+\.?\d*)', text, 20.0)
-    else:
-        feno_value = feno_value if feno_value else 20.0
-    
-    # Extract age
-    age_value = safe_extract_float(r'Age\s*[:\-]?\s*(\d+)', text, 35)
-    age_value = int(age_value) if age_value else 35
-    
-    # Extract BMI
-    bmi_value = safe_extract_float(r'BMI\s*[:\-]?\s*([\d.]+)', text, 24.0)
-    bmi_value = bmi_value if bmi_value else 24.0
-    
-    # Extract gender
-    gender_match = re.search(r'(?:Gender|Sex)\s*[:\-]?\s*(\w+)', text, re.IGNORECASE)
-    sex_value = "Male" if gender_match and 'male' in gender_match.group(1).lower() else "Female"
-    
-    # Extract smoking status
-    smoking_status = "Never"
-    if re.search(r'Smoking\s*[:\-]?\s*(?:Current|Yes)', text, re.IGNORECASE):
-        smoking_status = "Current"
-    elif re.search(r'Smoking\s*[:\-]?\s*Former', text, re.IGNORECASE):
-        smoking_status = "Former"
-    
-    # Extract family history
-    family_history = 1 if re.search(r'Family\s*History\s*[:\-]?\s*(?:Yes|Positive|True)', text, re.IGNORECASE) else 0
-    
-    # Extract allergies
-    allergies = "None"
-    if re.search(r'Allergies\s*[:\-]?\s*(.+?)(?:\n|$)', text, re.IGNORECASE):
-        match = re.search(r'Allergies\s*[:\-]?\s*(.+?)(?:\n|$)', text, re.IGNORECASE)
-        allergy_text = match.group(1).strip().lower()
-        if allergy_text and allergy_text not in ['none', 'no', 'n/a']:
-            allergies = match.group(1).strip()
-    
-    # Extract air pollution level
-    air_pollution = "Moderate"
-    if re.search(r'Air\s*Pollution\s*Level\s*[:\-]?\s*High', text, re.IGNORECASE):
-        air_pollution = "High"
-    elif re.search(r'Air\s*Pollution\s*Level\s*[:\-]?\s*Low', text, re.IGNORECASE):
-        air_pollution = "Low"
-    
-    # Extract physical activity level
-    physical_activity = "Moderate"
-    if re.search(r'Physical\s*Activity\s*Level\s*[:\-]?\s*High', text, re.IGNORECASE):
-        physical_activity = "High"
-    elif re.search(r'Physical\s*Activity\s*Level\s*[:\-]?\s*Low', text, re.IGNORECASE):
-        physical_activity = "Low"
-    
-    # Extract ER visits
-    er_visits = 0
-    er_match = re.search(r'(?:Number\s*of\s*)?ER\s*Visits\s*[:\-]?\s*(\d+)', text, re.IGNORECASE)
-    if er_match:
-        er_visits = int(er_match.group(1))
-    
-    # Extract medication adherence
-    medication_adherence = safe_extract_float(r'Medication\s*Adherence\s*[:\-]?\s*([\d.]+)', text, 0.8)
-    medication_adherence = medication_adherence if medication_adherence else 0.8
-    
-    # Check for positive risk indicators
-    has_positive_risk = re.search(r'(?:Asthma\s*Risk|Risk\s*Level)\s*[:\-]?\s*(?:POSITIVE|High|Yes)', text, re.IGNORECASE)
+def encode_sex(sex):
+    return 1 if str(sex).lower() == "male" else 0
 
-    data = {
-        "FEV1": fev1_value,
-        "Peak_Expiratory_Flow": peak_flow_value,
-        "FeNO_Level": feno_value,
-        "Age": age_value,
-        "Sex": sex_value,
-        "Family_History": family_history,
-        "Allergies": allergies,
-        "Air_Pollution_Level": air_pollution,
-        "Smoking_Status": smoking_status,
-        "BMI": bmi_value,
-        "Physical_Activity_Level": physical_activity,
-        "Number_of_ER_Visits": er_visits,
-        "Medication_Adherence": medication_adherence,
-        "Indoor_Smoke_Exposure": 0,
-        "Pets_at_Home": 0,
-        "has_positive_risk": has_positive_risk is not None
+
+def encode_allergies(val):
+    """
+    Robust allergy encoding
+    Prevents 'Dust' float conversion errors
+    """
+    text = str(val).lower().strip()
+
+    none_values = ["none", "no", "n/a", "na", ""]
+    if text in none_values:
+        return 0
+
+    allergy_keywords = [
+        "dust",
+        "pollen",
+        "pet",
+        "dander",
+        "mold",
+        "mite",
+        "mites"
+    ]
+
+    for word in allergy_keywords:
+        if word in text:
+            return 1
+
+    return 0
+
+
+def encode_pollution(val):
+    mapping = {
+        "low": 0,
+        "moderate": 1,
+        "high": 2
     }
+    return mapping.get(str(val).lower(), 1)
 
-    return pd.DataFrame([data]), None
 
-
-# --------------------------------------------------
-# Create prediction function with custom parameters
-# --------------------------------------------------
-def predict_asthma_with_params(fev1, peak_flow, feno, age, sex, family_history, 
-                               allergies, air_pollution, smoking_status, bmi, 
-                               physical_activity, er_visits, medication_adherence, 
-                               indoor_smoke, pets_at_home):
-    """
-    Predict asthma with comprehensive parameters using the trained ML model
-    """
-    
-    # Check if model is available
-    if asthma_model == "unavailable":
-        return "❌ Asthma model not available. Please check model file."
-    
-    # Encode categorical variables
-    sex_encoded = 1 if sex == "Male" else 0
-    family_history_encoded = 1 if family_history else 0
-    allergies_encoded = 0 if allergies == "None" else 1
-    
-    # Air pollution level encoding
-    air_pollution_map = {"Low": 0, "Moderate": 1, "High": 2}
-    air_pollution_encoded = air_pollution_map.get(air_pollution, 1)
-    
-    # Smoking status encoding
-    smoking_map = {"Never": 0, "Former": 1, "Current": 2}
-    smoking_encoded = smoking_map.get(smoking_status, 0)
-    
-    # Physical activity encoding
-    activity_map = {"Low": 0, "Moderate": 1, "High": 2}
-    activity_encoded = activity_map.get(physical_activity, 1)
-    
-    # Create dataframe with all parameters - ensure all values are numeric
-    data = {
-        "FEV1": float(fev1),
-        "Peak_Expiratory_Flow": float(peak_flow),
-        "FeNO_Level": float(feno),
-        "Age": int(age),
-        "Sex": sex_encoded,
-        "Family_History": int(family_history_encoded),
-        "Allergies": int(allergies_encoded),
-        "Air_Pollution_Level": int(air_pollution_encoded),
-        "Smoking_Status": int(smoking_encoded),
-        "BMI": float(bmi),
-        "Physical_Activity_Level": int(activity_encoded),
-        "Number_of_ER_Visits": int(er_visits),
-        "Medication_Adherence": float(medication_adherence),
-        "Indoor_Smoke_Exposure": int(1 if indoor_smoke else 0),
-        "Pets_at_Home": int(1 if pets_at_home else 0)
+def encode_smoking(val):
+    mapping = {
+        "never": 0,
+        "former": 1,
+        "current": 2
     }
-    
-    input_df = pd.DataFrame([data])
-    
-    # Use the trained model for prediction
+    return mapping.get(str(val).lower(), 0)
+
+
+def encode_activity(val):
+    mapping = {
+        "low": 0,
+        "moderate": 1,
+        "high": 2
+    }
+    return mapping.get(str(val).lower(), 1)
+
+
+# --------------------------------------------------
+# Prediction using manual parameters
+# --------------------------------------------------
+
+def predict_asthma_with_params(
+    fev1,
+    peak_flow,
+    feno,
+    age,
+    sex,
+    family_history,
+    allergies,
+    air_pollution,
+    smoking_status,
+    bmi,
+    physical_activity,
+    er_visits,
+    medication_adherence,
+    indoor_smoke,
+    pets_at_home
+):
+
+    if asthma_model is None:
+        return "❌ Asthma model not available"
+
     try:
-        pred = asthma_model.predict(input_df)[0]
-        prob = asthma_model.predict_proba(input_df)[0]
-        asthma_prob = prob[list(asthma_model.classes_).index(1)]
+        # Pre-encode all categorical values BEFORE creating DataFrame
+        sex_encoded = int(encode_sex(sex))
+        family_encoded = int(family_history)
+        allergies_encoded = int(encode_allergies(allergies))
+        pollution_encoded = int(encode_pollution(air_pollution))
+        smoking_encoded = int(encode_smoking(smoking_status))
+        activity_encoded = int(encode_activity(physical_activity))
+        
+        # Convert numeric inputs
+        fev1_num = float(fev1)
+        peak_flow_num = float(peak_flow)
+        feno_num = float(feno)
+        age_num = int(age)
+        bmi_num = float(bmi)
+        er_visits_num = int(er_visits)
+        med_adh_num = float(medication_adherence)
+        indoor_smoke_num = int(indoor_smoke)
+        pets_num = int(pets_at_home)
 
-        if pred == 1:
-            return f"🟥 Asthma Detected (Risk: {asthma_prob*100:.1f}%)"
-        else:
-            return f"🟩 Normal (Asthma Risk: {asthma_prob*100:.1f}%)"
+        # Create DataFrame with ONLY numeric values (no strings)
+        data = {
+            "FEV1": [fev1_num],
+            "Peak_Expiratory_Flow": [peak_flow_num],
+            "FeNO_Level": [feno_num],
+            "Age": [age_num],
+            "Sex": [sex_encoded],
+            "Family_History": [family_encoded],
+            "Allergies": [allergies_encoded],
+            "Air_Pollution_Level": [pollution_encoded],
+            "Smoking_Status": [smoking_encoded],
+            "BMI": [bmi_num],
+            "Physical_Activity_Level": [activity_encoded],
+            "Number_of_ER_Visits": [er_visits_num],
+            "Medication_Adherence": [med_adh_num],
+            "Indoor_Smoke_Exposure": [indoor_smoke_num],
+            "Pets_at_Home": [pets_num]
+        }
+
+        # Create DataFrame
+        df = pd.DataFrame(data)
+        
+        # Ensure ALL columns are numeric types
+        for col in df.columns:
+            df[col] = df[col].astype(float, errors='ignore')
+        
+        # Fill any NaN values with 0
+        df = df.fillna(0)
+        
+        # Convert to appropriate types
+        float_cols = ["FEV1", "Peak_Expiratory_Flow", "FeNO_Level", "BMI", "Medication_Adherence"]
+        for col in df.columns:
+            try:
+                if col in float_cols:
+                    df[col] = df[col].astype(float)
+                else:
+                    df[col] = df[col].astype(int)
+            except:
+                df[col] = df[col].astype(float)
+
+        # Try to predict
+        try:
+            pred = asthma_model.predict(df)[0]
+            prob = asthma_model.predict_proba(df)[0]
+            asthma_prob = prob[list(asthma_model.classes_).index(1)]
+
+            if pred == 1:
+                return f"🟥 Asthma Detected (Risk: {asthma_prob*100:.1f}%)"
+            else:
+                return f"🟩 Normal (Asthma Risk: {asthma_prob*100:.1f}%)"
+        except Exception as model_err:
+            # If model fails, use simple rule-based approach
+            return rule_based_prediction(fev1_num, peak_flow_num, feno_num, family_encoded, 
+                                        smoking_encoded, er_visits_num, pollution_encoded, 
+                                        activity_encoded, allergies_encoded)
 
     except Exception as e:
         return f"❌ Asthma Prediction Error: {str(e)}"
 
 
+def rule_based_prediction(fev1, peak_flow, feno, family_history, smoking, er_visits, pollution, activity, allergies):
+    """Fallback rule-based prediction when model fails"""
+    risk = 0.0
+    signals = []
+    
+    # FeNO > 25 ppb indicates inflammation
+    if feno > 25:
+        risk += 0.35
+        signals.append(f"High FeNO ({feno})")
+    
+    # Peak flow < 350 indicates obstruction
+    if peak_flow < 350:
+        risk += 0.30
+        signals.append(f"Low Peak Flow ({peak_flow})")
+    
+    # FEV1 < 2.0
+    if fev1 < 2.0:
+        risk += 0.15
+        signals.append(f"Low FEV1 ({fev1})")
+    
+    # Multiple ER visits
+    if er_visits >= 4:
+        risk += 0.10
+        signals.append(f"Multiple ER visits ({er_visits})")
+    elif er_visits >= 2:
+        risk += 0.05
+        signals.append(f"ER visits ({er_visits})")
+    
+    # Family history
+    if family_history == 1:
+        risk += 0.08
+        signals.append("Family History")
+    
+    # Current smoker
+    if smoking == 2:
+        risk += 0.08
+        signals.append("Current Smoker")
+    elif smoking == 1:
+        risk += 0.04
+        signals.append("Former Smoker")
+    
+    # High air pollution
+    if pollution == 2:
+        risk += 0.08
+        signals.append("High Air Pollution")
+    
+    # Allergies
+    if allergies == 1:
+        risk += 0.05
+        signals.append("Known Allergies")
+    
+    # Low activity
+    if activity == 0:
+        risk += 0.03
+        signals.append("Low Activity")
+    
+    risk = min(risk, 0.99)
+    
+    if risk >= 0.5:
+        return f"🟥 Asthma Detected (Risk: {risk*100:.1f}%) - {', '.join(signals) if signals else 'Rule-based'}"
+    else:
+        return f"🟩 Normal (Asthma Risk: {risk*100:.1f}%)"
+
+
 # --------------------------------------------------
-# Main prediction function (USED BY app.py for text)
+# OCR Text Feature Extraction
 # --------------------------------------------------
-def predict_asthma_from_text(text: str):
-    """
-    Takes OCR text → extracts features → predicts asthma risk using trained ML model
-    """
 
-    input_df, error = extract_asthma_features(text)
-    if error:
-        return f"❌ Asthma Prediction Failed: {error}"
-
-    # Check if model is available
-    if asthma_model == "unavailable":
-        return "❌ Asthma model not available. Please check model file."
-
-    # Encode categorical variables in the extracted dataframe
+def extract_value(pattern, text, default):
     try:
-        # Sex encoding
-        sex_map = {"Male": 1, "Female": 0}
-        if "Sex" in input_df.columns:
-            input_df["Sex"] = input_df["Sex"].map(sex_map).fillna(0).astype(int)
-        
-        # Allergies encoding
-        allergies_map = {"None": 0}
-        if "Allergies" in input_df.columns:
-            input_df["Allergies"] = input_df["Allergies"].apply(lambda x: 1 if x != "None" else 0).astype(int)
-        
-        # Air pollution encoding
-        air_pollution_map = {"Low": 0, "Moderate": 1, "High": 2}
-        if "Air_Pollution_Level" in input_df.columns:
-            input_df["Air_Pollution_Level"] = input_df["Air_Pollution_Level"].map(air_pollution_map).fillna(1).astype(int)
-        
-        # Smoking status encoding
-        smoking_map = {"Never": 0, "Former": 1, "Current": 2}
-        if "Smoking_Status" in input_df.columns:
-            input_df["Smoking_Status"] = input_df["Smoking_Status"].map(smoking_map).fillna(0).astype(int)
-        
-        # Physical activity encoding
-        activity_map = {"Low": 0, "Moderate": 1, "High": 2}
-        if "Physical_Activity_Level" in input_df.columns:
-            input_df["Physical_Activity_Level"] = input_df["Physical_Activity_Level"].map(activity_map).fillna(1).astype(int)
-        
-        # Store the positive risk flag before dropping it
-        has_positive_risk = input_df.get('has_positive_risk', pd.Series([False]))[0] if 'has_positive_risk' in input_df.columns else False
-        
-        # Remove non-model features
-        if 'has_positive_risk' in input_df.columns:
-            input_df = input_df.drop('has_positive_risk', axis=1)
-        
-        # Ensure all columns are numeric
-        input_df = input_df.astype({col: float if col in ["FEV1", "Peak_Expiratory_Flow", "FeNO_Level", "BMI", "Medication_Adherence"] else int 
-                                    for col in input_df.columns})
-    except Exception as e:
-        return f"❌ Feature Encoding Error: {str(e)}"
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match:
+            return float(match.group(1))
+    except:
+        pass
+    return default
 
-    # Use the trained model for prediction
-    try:
-        pred = asthma_model.predict(input_df)[0]
-        prob = asthma_model.predict_proba(input_df)[0]
 
-        asthma_prob = prob[list(asthma_model.classes_).index(1)]
-
-        if pred == 1:
-            return f"🟥 Asthma Detected (Risk: {asthma_prob*100:.1f}%)"
+def extract_asthma_parameters_from_text(text):
+    """
+    Extract all asthma assessment parameters from OCR text
+    Returns a dict with all parameters for table display
+    """
+    params = {
+        'fev1': extract_value(r'FEV1\s*[:\-]?\s*([\d.]+)', text, 2.5),
+        'peak_flow': extract_value(r'(?:Peak Flow|PEF)\s*[:\-]?\s*([\d.]+)', text, 450),
+        'feno': extract_value(r'FeNO\s*[:\-]?\s*([\d.]+)', text, 20),
+        'age': int(extract_value(r'Age\s*[:\-]?\s*(\d+)', text, 35)),
+        'bmi': extract_value(r'BMI\s*[:\-]?\s*([\d.]+)', text, 24),
+        'er_visits': int(extract_value(r'ER\s+Visits\s*[:\-]?\s*(\d+)', text, 0)),
+        'medication_adherence': extract_value(r'Medication\s+Adherence\s*[:\-]?\s*([\d.]+)', text, 0.8),
+    }
+    
+    # Extract categorical values
+    sex_match = re.search(r'(?:Sex|Gender)\s*[:\-]?\s*(\w+)', text, re.IGNORECASE)
+    params['sex'] = sex_match.group(1) if sex_match else "Male"
+    
+    family_match = re.search(r'Family\s+History\s*[:\-]?\s*(\w+)', text, re.IGNORECASE)
+    params['family_history'] = 1 if family_match and family_match.group(1).lower() in ['yes', 'positive', '1'] else 0
+    
+    allergy_match = re.search(r'Allergies\s*[:\-]?\s*([^\n\r]+)', text, re.IGNORECASE)
+    params['allergies'] = allergy_match.group(1).strip() if allergy_match else "None"
+    
+    smoking_match = re.search(r'Smoking\s*[:\-]?\s*(\w+)', text, re.IGNORECASE)
+    if smoking_match:
+        smoking_text = smoking_match.group(1).lower()
+        if 'current' in smoking_text:
+            params['smoking_status'] = "Current"
+        elif 'former' in smoking_text:
+            params['smoking_status'] = "Former"
         else:
-            return f"🟩 Normal (Asthma Risk: {asthma_prob*100:.1f}%)"
+            params['smoking_status'] = "Never"
+    else:
+        params['smoking_status'] = "Never"
+    
+    pollution_match = re.search(r'Air\s+Pollution\s*[:\-]?\s*(\w+)', text, re.IGNORECASE)
+    if pollution_match:
+        pollution_text = pollution_match.group(1).lower()
+        if 'high' in pollution_text:
+            params['air_pollution'] = "High"
+        elif 'low' in pollution_text:
+            params['air_pollution'] = "Low"
+        else:
+            params['air_pollution'] = "Moderate"
+    else:
+        params['air_pollution'] = "Moderate"
+    
+    activity_match = re.search(r'Physical\s+Activity\s*[:\-]?\s*(\w+)', text, re.IGNORECASE)
+    if activity_match:
+        activity_text = activity_match.group(1).lower()
+        if 'high' in activity_text:
+            params['physical_activity'] = "High"
+        elif 'low' in activity_text:
+            params['physical_activity'] = "Low"
+        else:
+            params['physical_activity'] = "Moderate"
+    else:
+        params['physical_activity'] = "Moderate"
+    
+    # Indoor smoke and pets (assume false if not found)
+    indoor_smoke_match = re.search(r'Indoor\s+Smoke|Second[- ]?hand\s+Smoke', text, re.IGNORECASE)
+    params['indoor_smoke'] = 1 if indoor_smoke_match else 0
+    
+    pets_match = re.search(r'Pets|Animals', text, re.IGNORECASE)
+    params['pets_at_home'] = 1 if pets_match else 0
+    
+    return params
+
+
+def predict_asthma_from_text(text):
+
+    if asthma_model is None:
+        return "❌ Asthma model not available"
+
+    try:
+
+        fev1 = extract_value(r'FEV1\s*[:\-]?\s*([\d.]+)', text, 2.5)
+        peak_flow = extract_value(r'(?:Peak Flow|PEF)\s*[:\-]?\s*([\d.]+)', text, 450)
+        feno = extract_value(r'FeNO\s*[:\-]?\s*([\d.]+)', text, 20)
+
+        age = extract_value(r'Age\s*[:\-]?\s*(\d+)', text, 35)
+        bmi = extract_value(r'BMI\s*[:\-]?\s*([\d.]+)', text, 24)
+
+        sex_match = re.search(r'(Sex|Gender)\s*[:\-]?\s*(\w+)', text, re.IGNORECASE)
+        sex = sex_match.group(2) if sex_match else "Male"
+
+        allergy_match = re.search(r'Allergies\s*[:\-]?\s*([^\n\r]+)', text, re.IGNORECASE)
+        allergies = allergy_match.group(1) if allergy_match else "None"
+
+        smoking = "Never"
+        if re.search(r'Smoking.*Current', text, re.IGNORECASE):
+            smoking = "Current"
+        elif re.search(r'Smoking.*Former', text, re.IGNORECASE):
+            smoking = "Former"
+
+        pollution = "Moderate"
+        if re.search(r'Air.*High', text, re.IGNORECASE):
+            pollution = "High"
+        elif re.search(r'Air.*Low', text, re.IGNORECASE):
+            pollution = "Low"
+
+        activity = "Moderate"
+        if re.search(r'Physical.*High', text, re.IGNORECASE):
+            activity = "High"
+        elif re.search(r'Physical.*Low', text, re.IGNORECASE):
+            activity = "Low"
+
+        family = 1 if re.search(r'Family.*Yes', text, re.IGNORECASE) else 0
+        er_visits = int(extract_value(r'ER\s*Visits\s*[:\-]?\s*(\d+)', text, 0))
+        medication = extract_value(r'Medication\s*Adherence\s*[:\-]?\s*([\d.]+)', text, 0.8)
+
+        # Call with proper encoding
+        return predict_asthma_with_params(
+            float(fev1),
+            float(peak_flow),
+            float(feno),
+            int(age),
+            sex,
+            family,
+            allergies,  # Pass as string, will be encoded in predict_asthma_with_params
+            pollution,
+            smoking,
+            float(bmi),
+            activity,
+            er_visits,
+            float(medication),
+            0,
+            0
+        )
 
     except Exception as e:
-        # Fallback: Rule-based prediction if model fails
-        try:
-            fev1 = input_df['FEV1'].values[0]
-            feno = input_df['FeNO_Level'].values[0]
-            peak_flow = input_df['Peak_Expiratory_Flow'].values[0]
-            family_history = input_df['Family_History'].values[0]
-            smoking_status = input_df['Smoking_Status'].values[0]
-            er_visits = input_df['Number_of_ER_Visits'].values[0]
-            air_pollution = input_df['Air_Pollution_Level'].values[0]
-            physical_activity = input_df['Physical_Activity_Level'].values[0]
-            
-            risk = 0.0
-            signals = []
-            
-            # Check for explicit positive risk marker
-            if input_df.get('has_positive_risk', pd.Series([False]))[0]:
-                return f"🟥 Asthma Detected - Positive risk assessment from report (100.0%)"
-            
-            # FeNO > 25 ppb indicates eosinophilic inflammation (STRONG indicator)
-            if feno > 25:
-                risk += 0.4
-                signals.append(f"High FeNO ({feno})")
-            
-            # Peak flow < 350 indicates significant obstruction (STRONG indicator)
-            if peak_flow < 350:
-                risk += 0.35
-                signals.append(f"Low Peak Flow ({peak_flow})")
-            
-            # FEV1 < 2.0 indicates airway obstruction
-            if fev1 < 2.0:
-                risk += 0.2
-                signals.append(f"Low FEV1 ({fev1})")
-            
-            # Multiple ER visits suggests chronic disease
-            if er_visits >= 4:
-                risk += 0.15
-                signals.append(f"Multiple ER visits ({er_visits})")
-            elif er_visits >= 2:
-                risk += 0.1
-                signals.append(f"ER visits ({er_visits})")
-            
-            # Family history
-            if family_history == 1:
-                risk += 0.1
-                signals.append("Family History positive")
-            
-            # Smoking (current smoker)
-            if smoking_status == 2:
-                risk += 0.1
-                signals.append("Current Smoker")
-            elif smoking_status == 1:
-                risk += 0.05
-                signals.append("Former Smoker")
-            
-            # High air pollution exposure
-            if air_pollution == 2:  # High
-                risk += 0.1
-                signals.append("High Air Pollution")
-            
-            # Low physical activity
-            if physical_activity == 0:  # Low
-                risk += 0.05
-                signals.append("Low Physical Activity")
-            
-            risk = min(risk, 1.0)
-            
-            if risk >= 0.5:
-                return f"🟥 Asthma Detected (Risk: {risk*100:.1f}%) - {', '.join(signals)}"
-            else:
-                return f"🟩 Normal (Asthma Risk: {risk*100:.1f}%)"
-        except Exception as e2:
-            return f"❌ Asthma Prediction Error: {str(e)}"
+        import traceback
+        traceback.print_exc()
+        return f"❌ Asthma Prediction Error: {str(e)}"
 
+
+# --------------------------------------------------
+# Assessment Parameters for Table Display
+# --------------------------------------------------
+
+def get_asthma_assessment_data(
+    fev1, peak_flow, feno, age, sex, family_history, 
+    allergies, air_pollution, smoking_status, bmi, 
+    physical_activity, er_visits, medication_adherence,
+    indoor_smoke, pets_at_home
+):
+    """
+    Generate detailed assessment data for table display
+    Similar to lab report formatter - returns DataFrame with TEST, VALUE, UNIT, REFERENCE RANGE, STATUS
+    """
+    
+    assessment_data = []
+    
+    # ===== Pulmonary Function Tests =====
+    # FEV1 (L)
+    fev1_ref = "1.5-4.0"
+    fev1_status = "Normal" if 1.5 <= fev1 <= 4.0 else "Abnormal"
+    assessment_data.append({
+        "Test": "FEV1 (Forced Expiratory Volume)",
+        "Value": f"{fev1:.2f}",
+        "Unit": "L",
+        "Reference Range": fev1_ref,
+        "Status": fev1_status
+    })
+    
+    # Peak Flow (L/min)
+    peak_ref = "350-700"
+    peak_status = "Normal" if 350 <= peak_flow <= 700 else "Abnormal"
+    assessment_data.append({
+        "Test": "Peak Expiratory Flow",
+        "Value": f"{peak_flow:.0f}",
+        "Unit": "L/min",
+        "Reference Range": peak_ref,
+        "Status": peak_status
+    })
+    
+    # FeNO (ppb)
+    feno_ref = "5-25"
+    feno_status = "Normal" if 5 <= feno <= 25 else "Abnormal"
+    assessment_data.append({
+        "Test": "FeNO Level (Fractional Exhaled NO)",
+        "Value": f"{feno:.1f}",
+        "Unit": "ppb",
+        "Reference Range": feno_ref,
+        "Status": feno_status
+    })
+    
+    # ===== Demographics =====
+    assessment_data.append({
+        "Test": "Age",
+        "Value": f"{int(age)}",
+        "Unit": "years",
+        "Reference Range": "5-80",
+        "Status": "Normal"
+    })
+    
+    assessment_data.append({
+        "Test": "Sex",
+        "Value": sex,
+        "Unit": "-",
+        "Reference Range": "-",
+        "Status": "Normal"
+    })
+    
+    # BMI
+    bmi_ref = "18.5-24.9"
+    if bmi < 18.5:
+        bmi_status = "Abnormal (Underweight)"
+    elif 18.5 <= bmi < 25:
+        bmi_status = "Normal"
+    elif 25 <= bmi < 30:
+        bmi_status = "Abnormal (Overweight)"
+    else:
+        bmi_status = "Abnormal (Obese)"
+    
+    assessment_data.append({
+        "Test": "BMI (Body Mass Index)",
+        "Value": f"{bmi:.1f}",
+        "Unit": "kg/m²",
+        "Reference Range": bmi_ref,
+        "Status": bmi_status
+    })
+    
+    # ===== Medical History =====
+    assessment_data.append({
+        "Test": "Family History of Asthma",
+        "Value": "Yes" if family_history else "No",
+        "Unit": "-",
+        "Reference Range": "No",
+        "Status": "Abnormal" if family_history else "Normal"
+    })
+    
+    assessment_data.append({
+        "Test": "ER Visits (past year)",
+        "Value": f"{int(er_visits)}",
+        "Unit": "visits",
+        "Reference Range": "0-1",
+        "Status": "Abnormal" if er_visits > 1 else "Normal"
+    })
+    
+    assessment_data.append({
+        "Test": "Medication Adherence",
+        "Value": f"{medication_adherence*100:.0f}%",
+        "Unit": "%",
+        "Reference Range": ">80%",
+        "Status": "Normal" if medication_adherence >= 0.8 else "Abnormal"
+    })
+    
+    # ===== Environmental & Lifestyle Factors =====
+    assessment_data.append({
+        "Test": "Known Allergies",
+        "Value": allergies if allergies != "None" else "None",
+        "Unit": "-",
+        "Reference Range": "None",
+        "Status": "Abnormal" if allergies != "None" else "Normal"
+    })
+    
+    assessment_data.append({
+        "Test": "Smoking Status",
+        "Value": smoking_status,
+        "Unit": "-",
+        "Reference Range": "Never",
+        "Status": "Abnormal" if smoking_status != "Never" else "Normal"
+    })
+    
+    assessment_data.append({
+        "Test": "Air Pollution Level",
+        "Value": air_pollution,
+        "Unit": "-",
+        "Reference Range": "Low",
+        "Status": "Abnormal" if air_pollution != "Low" else "Normal"
+    })
+    
+    # ===== Additional Risk Factors =====
+    assessment_data.append({
+        "Test": "Physical Activity Level",
+        "Value": physical_activity,
+        "Unit": "-",
+        "Reference Range": "Moderate-High",
+        "Status": "Abnormal" if physical_activity == "Low" else "Normal"
+    })
+    
+    assessment_data.append({
+        "Test": "Indoor Smoke Exposure",
+        "Value": "Yes" if indoor_smoke else "No",
+        "Unit": "-",
+        "Reference Range": "No",
+        "Status": "Abnormal" if indoor_smoke else "Normal"
+    })
+    
+    assessment_data.append({
+        "Test": "Pets at Home",
+        "Value": "Yes" if pets_at_home else "No",
+        "Unit": "-",
+        "Reference Range": "No Allergen Source",
+        "Status": "Abnormal" if pets_at_home else "Normal"
+    })
+    
+    return pd.DataFrame(assessment_data)
