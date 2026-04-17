@@ -738,6 +738,29 @@ def get_positive_risk(model, features, default_high=0.8, default_low=0.2, positi
 script_dir = os.path.dirname(os.path.abspath(__file__))
 models_dir = os.path.join(script_dir, "models")
 
+# ===================== CHECK MODEL STATUS AT STARTUP =====================
+@st.cache_resource
+def check_model_status():
+    try:
+        from pneumonia_utils import MODEL_LOADED, MODEL_LOAD_ERROR
+        dengue_ok = load_model(os.path.join(models_dir, "best_dengue_model.pkl")) is not None
+        asthma_ok = load_model(os.path.join(models_dir, "asthma_rf_pipeline.pkl")) is not None
+        pneumonia_status = "Loaded" if MODEL_LOADED else f"Using Fallback ({MODEL_LOAD_ERROR or 'Unknown'})"
+        
+        return {
+            'dengue': "✅ Loaded" if dengue_ok else "⚠️ Failed",
+            'asthma': "✅ Loaded" if asthma_ok else "⚠️ Failed", 
+            'pneumonia': "✅ Loaded" if MODEL_LOADED else "⚠️ " + pneumonia_status
+        }
+    except Exception as e:
+        return {
+            'dengue': "⚠️ Error",
+            'asthma': "⚠️ Error",
+            'pneumonia': "⚠️ Error"
+        }
+
+model_status = check_model_status()
+
 with st.sidebar:
     st.markdown(f"""
     <div style='
@@ -1014,12 +1037,38 @@ if selected == "Dashboard":
     
     /* Card Subtitle */
     .card-subtitle {
-        color: rgba(255, 255, 255, 0.95);
+        color: rgba(255, 255, 255, 0.95) !important;
         font-size: 12px;
         margin: 0;
         font-weight: 600;
         letter-spacing: 0.3px;
         text-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+        text-decoration: none !important;
+    }
+    
+    /* Remove ALL underlines from card links */
+    .card-button {
+        text-decoration: none !important;
+    }
+    
+    .card-button * {
+        text-decoration: none !important;
+    }
+    
+    .card-button:hover {
+        text-decoration: none !important;
+    }
+    
+    .card-button:hover * {
+        text-decoration: none !important;
+    }
+    
+    .card-button:focus {
+        text-decoration: none !important;
+    }
+    
+    .card-button:focus * {
+        text-decoration: none !important;
     }
     
     /* Animations */
@@ -1180,12 +1229,29 @@ elif selected == "Dengue Prediction":
         uploaded_file = st.file_uploader("Click to upload PDF file", type=["pdf"], label_visibility="collapsed")
 
         if uploaded_file:
+            # Clear previous results from session state to prevent stale data
+            for key in list(st.session_state.keys()):
+                if 'dengue' in key.lower():
+                    del st.session_state[key]
             with st.spinner("🔄 Processing PDF..."):
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
                     tmp.write(uploaded_file.read())
                     pdf_path = tmp.name
 
-                pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+                # Try to find Tesseract automatically, or use default path
+                import shutil
+                tesseract_path = shutil.which("tesseract")
+                if tesseract_path:
+                    pytesseract.pytesseract.tesseract_cmd = tesseract_path
+                else:
+                    # Try default Windows installation path
+                    default_path = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+                    if os.path.exists(default_path):
+                        pytesseract.pytesseract.tesseract_cmd = default_path
+                    else:
+                        st.error("❌ Tesseract-OCR not found. Please install from: https://github.com/UB-Mannheim/tesseract/wiki")
+                        st.stop()
+                
                 images = convert_from_path(pdf_path)
                 text = "".join(pytesseract.image_to_string(img) for img in images)
             
@@ -1518,56 +1584,6 @@ elif selected == "Asthma Prediction":
                     
                     # Display main result
                     show_risk(result, risk, "Asthma Risk Assessment")
-                    
-                    # Display assessment table
-                    st.markdown(f"<h4 style='color: {MEDICAL_COLORS['dark_blue']}; margin-top: 20px;'>📋 Detailed Assessment Results</h4>", unsafe_allow_html=True)
-                    
-                    # Get assessment data
-                    assessment_df = get_asthma_assessment_data(
-                        float(fev1), float(peak_flow), float(feno), int(age), sex,
-                        family_history, allergies, air_pollution, smoking_status,
-                        float(bmi), physical_activity, int(er_visits),
-                        float(medication_adherence), indoor_smoke, pets_at_home
-                    )
-                    
-                    # Display table with better HTML
-                    def get_table_html(df):
-                        html = '<div style="margin-top: 15px; border-radius: 10px; overflow: hidden; box-shadow: 0 4px 12px rgba(0,0,0,0.1);"><table style="width: 100%; border-collapse: collapse; font-size: 14px;">'
-                        
-                        # Header
-                        html += '<thead><tr style="background: linear-gradient(135deg, #0D47A1 0%, #1976D2 100%); color: white; font-weight: 700;">'
-                        html += '<th style="padding: 12px 15px; text-align: left; border: 1px solid #ddd;">TEST</th>'
-                        html += '<th style="padding: 12px 15px; text-align: center; border: 1px solid #ddd;">VALUE</th>'
-                        html += '<th style="padding: 12px 15px; text-align: center; border: 1px solid #ddd;">UNIT</th>'
-                        html += '<th style="padding: 12px 15px; text-align: center; border: 1px solid #ddd;">REFERENCE RANGE</th>'
-                        html += '<th style="padding: 12px 15px; text-align: center; border: 1px solid #ddd;">STATUS</th>'
-                        html += '</tr></thead><tbody>'
-                        
-                        # Body rows
-                        for idx, row in df.iterrows():
-                            status = row['Status']
-                            if "Abnormal" in status:
-                                row_color = "#FFEBEE"
-                                status_color = "#D32F2F"
-                            elif "Normal" in status:
-                                row_color = "#E8F5E9"
-                                status_color = "#388E3C"
-                            else:
-                                row_color = "#FFFFFF"
-                                status_color = "#424242"
-                            
-                            html += f'<tr style="background-color: {row_color}; border-bottom: 1px solid #eeeeee;">'
-                            html += f'<td style="padding: 12px 15px; text-align: left; border: 1px solid #ddd; font-weight: 500;">{row["Test"]}</td>'
-                            html += f'<td style="padding: 12px 15px; text-align: center; border: 1px solid #ddd; font-weight: 600;">{row["Value"]}</td>'
-                            html += f'<td style="padding: 12px 15px; text-align: center; border: 1px solid #ddd;">{row["Unit"]}</td>'
-                            html += f'<td style="padding: 12px 15px; text-align: center; border: 1px solid #ddd;">{row["Reference Range"]}</td>'
-                            html += f'<td style="padding: 12px 15px; text-align: center; border: 1px solid #ddd; font-weight: 600; color: {status_color};">{status}</td>'
-                            html += '</tr>'
-                        
-                        html += '</tbody></table></div>'
-                        return html
-                    
-                    st.markdown(get_table_html(assessment_df), unsafe_allow_html=True)
                     
                 except Exception as e:
                     st.error(f"❌ Error: {str(e)}")

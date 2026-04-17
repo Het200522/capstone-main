@@ -5,21 +5,46 @@ import warnings
 warnings.filterwarnings('ignore')
 import cv2
 
-MODEL_PATH = os.path.join("model", "trained.h5")
+try:
+    from tensorflow.keras.models import load_model
+except ImportError:
+    try:
+        from keras.models import load_model
+    except ImportError:
+        load_model = None
+        print(f"⚠️ Neither TensorFlow nor Keras available. Using fallback methods.")
+
+# Use absolute path to model
+script_dir = os.path.dirname(os.path.abspath(__file__))
+MODEL_PATH = os.path.join(script_dir, "model", "trained.h5")
 
 model = None
 MODEL_LOADED = False
+MODEL_LOAD_ERROR = None
 
-# Silent loading - avoid Unicode encoding issues
-# TRY 1: Load with TensorFlow
-# NOTE: Disabled due to module naming conflicts with code/ directory
-try:
-    pass  # Skip TensorFlow loading
-except Exception as e:
-    pass
+# Load the CNN Model using TensorFlow/Keras
+if load_model is not None:
+    try:
+        # Compile=False saves loading time if you are only predicting, not training
+        if os.path.exists(MODEL_PATH):
+            model = load_model(MODEL_PATH, compile=False) 
+            MODEL_LOADED = True
+            print("✅ Successfully loaded trained.h5 CNN model.")
+        else:
+            MODEL_LOAD_ERROR = f"Model file not found at {MODEL_PATH}"
+            print(f"⚠️ Model file not found. Using OpenCV fallback. Path: {MODEL_PATH}")
+            MODEL_LOADED = False
+    except Exception as e:
+        MODEL_LOAD_ERROR = str(e)
+        print(f"⚠️ Failed to load CNN model. Falling back to OpenCV algorithm. Error: {e}")
+        MODEL_LOADED = False
+else:
+    MODEL_LOAD_ERROR = "TensorFlow.Keras not available"
+    print(f"⚠️ TensorFlow.Keras not available. Using fallback detection methods.")
+    MODEL_LOADED = False
 
-# TRY 2: Load with h5py and reconstruct
-if not MODEL_LOADED:
+# TRY 2: Try alternate h5 loading method (if h5py available)
+if not MODEL_LOADED and os.path.exists(MODEL_PATH):
     try:
         import h5py
         import json
@@ -38,11 +63,13 @@ if not MODEL_LOADED:
                 if not MODEL_LOADED:
                     MODEL_LOADED = True
     except Exception as e:
+        if not MODEL_LOAD_ERROR:
+            MODEL_LOAD_ERROR = f"H5PY: {str(e)}"
         MODEL_LOADED = False
 
-# TRY 3: Use advanced image analysis
+# TRY 3: Use advanced image analysis as fallback
 if not MODEL_LOADED:
-    pass
+    print(f"⚠️ Using OpenCV image analysis for pneumonia detection (ML model unavailable)")
 
 
 def classify_pneumonia_type(img_array):

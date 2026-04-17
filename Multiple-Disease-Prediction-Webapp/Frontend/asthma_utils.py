@@ -184,22 +184,60 @@ def predict_asthma_with_params(
             pred = asthma_model.predict(df)[0]
             prob = asthma_model.predict_proba(df)[0]
             asthma_prob = prob[list(asthma_model.classes_).index(1)]
+            
+            # Calculate risk from abnormal parameters
+            # This ensures we ALWAYS show risk if abnormal parameters exist
+            abnormal_count = 0
+            
+            if fev1_num < 2.0:
+                abnormal_count += 1
+            if peak_flow_num < 350:
+                abnormal_count += 1
+            if feno_num > 25:
+                abnormal_count += 1
+            if er_visits_num >= 2:
+                abnormal_count += 1
+            if med_adh_num < 0.8:
+                abnormal_count += 1
+            if bmi_num >= 25:
+                abnormal_count += 1
+            if family_encoded == 1:
+                abnormal_count += 1
+            if smoking_encoded >= 1:  # Former or Current smoker
+                abnormal_count += 1
+            if pollution_encoded >= 1:  # Moderate or High pollution
+                abnormal_count += 1
+            if allergies_encoded == 1:
+                abnormal_count += 1
+            if activity_encoded == 0:  # Low activity
+                abnormal_count += 1
+            
+            # ALWAYS apply minimum risk if abnormal parameters exist
+            # This fixes the issue of 0.0% showing when there are abnormal params
+            if abnormal_count > 0:
+                # Calculate minimum risk: 3% per abnormal parameter (up to 20%)
+                min_risk = min(0.03 * abnormal_count, 0.20)
+                # Use the higher of model probability or calculated minimum
+                asthma_prob = max(asthma_prob, min_risk)
 
             if pred == 1:
                 return f"🟥 Asthma Detected (Risk: {asthma_prob*100:.1f}%)"
             else:
+                # Ensure minimum 1% risk display for Normal predictions (never show 0.0%)
+                if asthma_prob < 0.01:
+                    asthma_prob = 0.01
                 return f"🟩 Normal (Asthma Risk: {asthma_prob*100:.1f}%)"
         except Exception as model_err:
             # If model fails, use simple rule-based approach
             return rule_based_prediction(fev1_num, peak_flow_num, feno_num, family_encoded, 
                                         smoking_encoded, er_visits_num, pollution_encoded, 
-                                        activity_encoded, allergies_encoded)
+                                        activity_encoded, allergies_encoded, med_adh_num, bmi_num)
 
     except Exception as e:
         return f"❌ Asthma Prediction Error: {str(e)}"
 
 
-def rule_based_prediction(fev1, peak_flow, feno, family_history, smoking, er_visits, pollution, activity, allergies):
+def rule_based_prediction(fev1, peak_flow, feno, family_history, smoking, er_visits, pollution, activity, allergies, medication_adherence=0.8, bmi=25):
     """Fallback rule-based prediction when model fails"""
     risk = 0.0
     signals = []
@@ -219,45 +257,65 @@ def rule_based_prediction(fev1, peak_flow, feno, family_history, smoking, er_vis
         risk += 0.15
         signals.append(f"Low FEV1 ({fev1})")
     
-    # Multiple ER visits
+    # Multiple ER visits - STRONG INDICATOR
     if er_visits >= 4:
-        risk += 0.10
+        risk += 0.25  # Increased from 0.10
         signals.append(f"Multiple ER visits ({er_visits})")
     elif er_visits >= 2:
-        risk += 0.05
+        risk += 0.12  # Increased from 0.05
         signals.append(f"ER visits ({er_visits})")
+    
+    # Poor medication adherence - CRITICAL
+    if medication_adherence < 0.5:
+        risk += 0.20  # New: High impact for poor adherence
+        signals.append(f"Low Medication Adherence ({medication_adherence*100:.0f}%)")
+    elif medication_adherence < 0.8:
+        risk += 0.10  # New: Moderate impact for moderate adherence
+        signals.append(f"Inadequate Medication Adherence ({medication_adherence*100:.0f}%)")
+    
+    # BMI - overweight/obese increases asthma risk
+    if bmi >= 30:
+        risk += 0.08
+        signals.append(f"Obesity (BMI: {bmi:.1f})")
+    elif bmi >= 25:
+        risk += 0.05
+        signals.append(f"Overweight (BMI: {bmi:.1f})")
     
     # Family history
     if family_history == 1:
-        risk += 0.08
+        risk += 0.10  # Increased from 0.08
         signals.append("Family History")
     
     # Current smoker
     if smoking == 2:
-        risk += 0.08
+        risk += 0.12  # Increased from 0.08
         signals.append("Current Smoker")
     elif smoking == 1:
-        risk += 0.04
+        risk += 0.08  # Increased from 0.04
         signals.append("Former Smoker")
     
     # High air pollution
     if pollution == 2:
-        risk += 0.08
+        risk += 0.10  # Increased from 0.08
         signals.append("High Air Pollution")
+    elif pollution == 1:
+        risk += 0.05
+        signals.append("Moderate Air Pollution")
     
     # Allergies
     if allergies == 1:
-        risk += 0.05
+        risk += 0.08  # Increased from 0.05
         signals.append("Known Allergies")
     
     # Low activity
     if activity == 0:
-        risk += 0.03
+        risk += 0.05  # Increased from 0.03
         signals.append("Low Activity")
     
     risk = min(risk, 0.99)
     
-    if risk >= 0.5:
+    # LOWER threshold to 0.35 for better detection with multiple abnormal parameters
+    if risk >= 0.35:
         return f"🟥 Asthma Detected (Risk: {risk*100:.1f}%) - {', '.join(signals) if signals else 'Rule-based'}"
     else:
         return f"🟩 Normal (Asthma Risk: {risk*100:.1f}%)"
@@ -291,6 +349,10 @@ def extract_asthma_parameters_from_text(text):
         'er_visits': int(extract_value(r'ER\s+Visits\s*[:\-]?\s*(\d+)', text, 0)),
         'medication_adherence': extract_value(r'Medication\s+Adherence\s*[:\-]?\s*([\d.]+)', text, 0.8),
     }
+    
+    # Convert medication adherence if it's in percentage format
+    if params['medication_adherence'] > 1:
+        params['medication_adherence'] = params['medication_adherence'] / 100.0
     
     # Extract categorical values
     sex_match = re.search(r'(?:Sex|Gender)\s*[:\-]?\s*(\w+)', text, re.IGNORECASE)
@@ -388,7 +450,12 @@ def predict_asthma_from_text(text):
 
         family = 1 if re.search(r'Family.*Yes', text, re.IGNORECASE) else 0
         er_visits = int(extract_value(r'ER\s*Visits\s*[:\-]?\s*(\d+)', text, 0))
+        
+        # Extract medication adherence - handle both percentage and decimal formats
         medication = extract_value(r'Medication\s*Adherence\s*[:\-]?\s*([\d.]+)', text, 0.8)
+        # If value > 1, assume it's a percentage and convert to decimal
+        if medication > 1:
+            medication = medication / 100.0
 
         # Call with proper encoding
         return predict_asthma_with_params(
