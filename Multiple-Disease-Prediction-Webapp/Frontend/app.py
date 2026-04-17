@@ -1595,7 +1595,7 @@ elif selected == "Pneumonia Detection":
     medical_header(
         "Pneumonia Detection System",
         "Chest X-ray Analysis using AI",
-        "🩻"
+        "🔍"
     )
     
     # Add medical background image
