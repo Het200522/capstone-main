@@ -1123,7 +1123,7 @@ if selected == "Dashboard":
 <div class="card-subtitle">Respiratory Analysis</div>
 </a>
 <a href="?page=pneumonia" class="card-button pneumonia" title="Click to detect Pneumonia">
-<span class="card-icon">🩻</span>
+<span class="card-icon">🔍</span>
 <div class="card-title">Pneumonia<br>Detection</div>
 <div class="card-subtitle">X-ray Analysis</div>
 </a>
