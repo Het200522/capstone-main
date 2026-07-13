@@ -20,6 +20,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
+WORKDIR /app/Multiple-Disease-Prediction-Webapp/Frontend
+
 EXPOSE 10000
 
-CMD ["streamlit", "run", "app.py", "--server.port=10000", "--server.address=0.0.0.0"]
+CMD ["streamlit","run","app.py","--server.port=10000","--server.address=0.0.0.0"]
